@@ -118,8 +118,8 @@ jobs:
       with:
         name: kmod-${{ env.PKG_NAME }}-openwrt-25.12
         path: |
-          openwrt-sdk/bin/packages/*/base/kmod-${{ env.PKG_NAME }}*.apk
-          openwrt-sdk/bin/packages/*/base/kmod-${{ env.PKG_NAME }}*.ipk
-          openwrt-sdk/bin/targets/*/packages/kmod-${{ env.PKG_NAME }}*.apk
-          openwrt-sdk/bin/targets/*/packages/kmod-${{ env.PKG_NAME }}*.ipk
+          openwrt-sdk/bin/targets/**/kmod-axs5106*.apk
+          openwrt-sdk/bin/targets/**/kmod-axs5106*.ipk
+          openwrt-sdk/bin/packages/**/kmod-axs5106*.apk
+          openwrt-sdk/bin/packages/**/kmod-axs5106*.ipk
         if-no-files-found: warn
