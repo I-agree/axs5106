@@ -13,7 +13,6 @@ jobs:
     
     env:
       PKG_NAME: axs5106
-      # 直接锁定准确的 SDK 文件名 (GCC 14.3.0, Zstd 压缩格式)
       SDK_FILE: openwrt-sdk-25.12.4-x86-64_gcc-14.3.0_musl.Linux-x86_64.tar.zst
       RELEASE_VER: "25.12.4"
       TARGET_DIR: "x86/64"
@@ -21,25 +20,19 @@ jobs:
     steps:
     - name: Checkout repository
       uses: actions/checkout@v6.0.3
-
     - name: Optimize runner environment (Swap & /tmp)
       run: |
         # 🚨 【针对性物理解决 Swap 核心隐患】 🚨
         echo "⚙️ 正在物理重构编译机 Swap 交换分区技术栈..."
-        # 1. 停用系统可能存在的零碎、低效旧交换分区
         sudo swapoff -a || true
-        # 2. 划出 5GB 专属全量 Swap 空间
         sudo dd if=/dev/zero of=/swapfile bs=1M count=5120
         sudo chmod 600 /swapfile
         sudo mkswap /swapfile
         sudo swapon /swapfile
-        # 3. 强行修改内核虚拟内存激进系数（从默认 60 压榨到 10）
-        # 迫使 CPU 优先榨干物理内存，不到最后一刻绝不读写硬盘，从底层物理掐断 Swap 造成的 I/O 假死
         sudo sysctl vm.swappiness=10
         echo "✅ Swap 扩容至 5GB 且 swappiness=10 校准完毕！"
         
         echo "📊 扩容系统全局 /tmp 至 10G"
-        # 扩容系统默认 /tmp 临时分区（关键修复）
         sudo umount /tmp || true
         sudo mount -t tmpfs tmpfs /tmp -o size=10G,nr_inodes=0
         echo "✅ /tmp 扩容至 10GB 完成"
@@ -51,7 +44,6 @@ jobs:
     - name: Install build dependencies (including zstd)
       run: |
         sudo apt-get update
-        # 注意：这里必须安装 zstd，否则无法解压 .tar.zst 文件
         sudo apt-get install -y build-essential clang flex bison g++ gawk \
         gcc-multilib g++-multilib gettext git libncurses-dev libssl-dev \
         python3 python3-setuptools rsync swig unzip zlib1g-dev \
@@ -59,9 +51,7 @@ jobs:
 
     - name: Download OpenWrt 25.12 SDK
       run: |
-        # GitHub Actions 直连 OpenWrt 官方源速度极快，无需使用国内镜像
         OFFICIAL_URL="https://downloads.openwrt.org/releases/${RELEASE_VER}/targets/${TARGET_DIR}/${SDK_FILE}"
-        
         echo "Downloading SDK from official OpenWrt source..."
         wget -q --show-progress "$OFFICIAL_URL" -O sdk.tar.zst
         
@@ -74,25 +64,32 @@ jobs:
     - name: Extract SDK
       run: |
         mkdir -p openwrt-sdk
-        # 使用 tar 自动识别 zstd 格式进行解压
         tar --zstd -xf sdk.tar.zst --strip-components=1 -C openwrt-sdk
         echo "SDK extracted successfully."
 
     - name: Prepare package directory
       run: |
         mkdir -p openwrt-sdk/package/$PKG_NAME
-        rsync -a --exclude='.git' --exclude='.github' ./ openwrt-sdk/package/$PKG_NAME/
+        # 🚨 关键修复：必须排除 openwrt-sdk 目录和 sdk.tar.zst，防止 rsync 无限递归死循环！
+        rsync -a \
+          --exclude='.git' \
+          --exclude='.github' \
+          --exclude='openwrt-sdk' \
+          --exclude='sdk.tar.zst' \
+          --exclude='.gitignore' \
+          ./ openwrt-sdk/package/$PKG_NAME/
+          
+        echo "Package files copied successfully."
+        ls -la openwrt-sdk/package/$PKG_NAME/
 
     - name: Update feeds and configure
       working-directory: openwrt-sdk
       run: |
-        # 直接使用官方默认源更新 feeds (GitHub Actions 连接官方源速度极快)
         ./scripts/feeds update -a
         ./scripts/feeds install -a
         
         make defconfig
         
-        # 强制开启我们的模块编译 (M 代表编译为 .ko 模块)
         echo "CONFIG_PACKAGE_kmod-$PKG_NAME=m" >> .config
         make defconfig
 
@@ -100,7 +97,7 @@ jobs:
       working-directory: openwrt-sdk
       run: |
         echo "Starting compilation against Linux 6.12 kernel headers..."
-        make package/$PKG_NAME/compile V=s -j2
+        make package/$PKG_NAME/compile V=s -j$(nproc)
 
     - name: Check build result and collect artifacts
       working-directory: openwrt-sdk
