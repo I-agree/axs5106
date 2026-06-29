@@ -12,52 +12,45 @@ jobs:
     runs-on: ubuntu-22.04
     
     env:
-      # 锁定 OpenWrt 25.12.4 (Linux 6.12) 稳定版目录
+      PKG_NAME: axs5106
+      # 直接锁定准确的 SDK 文件名 (GCC 14.3.0, Zstd 压缩格式)
+      SDK_FILE: openwrt-sdk-25.12.4-x86-64_gcc-14.3.0_musl.Linux-x86_64.tar.zst
       RELEASE_VER: "25.12.4"
       TARGET_DIR: "x86/64"
-      PKG_NAME: axs5106
 
     steps:
     - name: Checkout repository
       uses: actions/checkout@v4
 
-    - name: Install build dependencies
+    - name: Install build dependencies (including zstd)
       run: |
         sudo apt-get update
+        # 注意：这里必须安装 zstd，否则无法解压 .tar.zst 文件
         sudo apt-get install -y build-essential clang flex bison g++ gawk \
         gcc-multilib g++-multilib gettext git libncurses-dev libssl-dev \
         python3 python3-setuptools rsync swig unzip zlib1g-dev \
-        file wget libelf-dev curl
+        file wget libelf-dev curl zstd
 
-    - name: Fetch and Download OpenWrt 25.12 SDK
+    - name: Download OpenWrt 25.12 SDK
       run: |
-        MIRROR_URL="https://mirrors.tuna.tsinghua.edu.cn/openwrt/releases/${RELEASE_VER}/targets/${TARGET_DIR}"
-        OFFICIAL_URL="https://downloads.openwrt.org/releases/${RELEASE_VER}/targets/${TARGET_DIR}"
+        MIRROR_URL="https://mirrors.tuna.tsinghua.edu.cn/openwrt/releases/${RELEASE_VER}/targets/${TARGET_DIR}/${SDK_FILE}"
+        OFFICIAL_URL="https://downloads.openwrt.org/releases/${RELEASE_VER}/targets/${TARGET_DIR}/${SDK_FILE}"
         
-        echo "Fetching SDK filename from Tsinghua Mirror..."
-        # 稳定版目录固定不变，用 curl 抓取页面提取 .tar.xz 文件名，100% 准确
-        SDK_FILE=$(curl -s "${MIRROR_URL}/" | grep -o 'openwrt-sdk-.*\.Linux-x86_64\.tar\.xz' | head -n 1)
+        echo "Attempting to download SDK from Tsinghua Mirror..."
+        # 优先尝试清华镜像，如果失败 (exit code 非 0) 则回退到官方源
+        wget -q --show-progress "$MIRROR_URL" -O sdk.tar.zst || wget -q --show-progress "$OFFICIAL_URL" -O sdk.tar.zst
         
-        if [ -z "$SDK_FILE" ]; then
-          echo "Mirror timeout, fallback to official source..."
-          SDK_FILE=$(curl -s "${OFFICIAL_URL}/" | grep -o 'openwrt-sdk-.*\.Linux-x86_64\.tar\.xz' | head -n 1)
-          BASE_URL=$OFFICIAL_URL
-        else
-          BASE_URL=$MIRROR_URL
-        fi
-
-        if [ -z "$SDK_FILE" ]; then
-          echo "::error::Failed to find SDK file in ${RELEASE_VER} directory!"
+        if [ ! -s sdk.tar.zst ]; then
+          echo "::error::SDK download failed!"
           exit 1
         fi
-        
-        FULL_URL="${BASE_URL}/${SDK_FILE}"
-        echo "Found SDK: ${SDK_FILE}"
-        echo "Downloading from: ${FULL_URL}"
-        
-        wget -q --show-progress "${FULL_URL}" -O sdk.tar.xz
+        echo "SDK downloaded successfully."
+
+    - name: Extract SDK
+      run: |
         mkdir -p openwrt-sdk
-        tar -xJf sdk.tar.xz --strip-components=1 -C openwrt-sdk
+        # 使用 tar 自动识别 zstd 格式进行解压
+        tar --zstd -xf sdk.tar.zst --strip-components=1 -C openwrt-sdk
         echo "SDK extracted successfully."
 
     - name: Prepare package directory
@@ -82,17 +75,16 @@ jobs:
         echo "CONFIG_PACKAGE_kmod-$PKG_NAME=m" >> .config
         make defconfig
 
-    - name: Compile kernel module
+    - name: Compile kernel module (Linux 6.12)
       working-directory: openwrt-sdk
       run: |
-        echo "Starting compilation against Linux 6.12..."
+        echo "Starting compilation against Linux 6.12 kernel headers..."
         make package/$PKG_NAME/compile V=s -j2
 
     - name: Check build result and collect artifacts
       working-directory: openwrt-sdk
       run: |
         echo "Searching for compiled kernel object..."
-        # 核心验证：只要 .ko 文件生成了，就说明 C 代码和 Makefile 在 Linux 6.12 下编译成功！
         KO_FILE=$(find build_dir/ -name "${PKG_NAME}.ko")
         if [ -z "$KO_FILE" ]; then
           echo "::error::Compilation failed! ${PKG_NAME}.ko not found."
@@ -106,7 +98,6 @@ jobs:
     - name: Upload compiled Package artifact
       uses: actions/upload-artifact@v4
       with:
-        # 25.12 使用 apk，旧版使用 ipk，这里使用通配符同时兼容两者
         name: kmod-${{ env.PKG_NAME }}-openwrt-25.12
         path: |
           openwrt-sdk/bin/packages/*/base/kmod-${{ env.PKG_NAME }}*.apk
