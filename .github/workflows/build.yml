@@ -97,7 +97,7 @@ jobs:
       working-directory: openwrt-sdk
       run: |
         echo "Starting compilation against Linux 6.12 kernel headers..."
-        make package/$PKG_NAME/compile V=s -j$(nproc)
+        make package/$PKG_NAME/compile V=w -j$(nproc)
 
     - name: Check build result and collect artifacts
       working-directory: openwrt-sdk
