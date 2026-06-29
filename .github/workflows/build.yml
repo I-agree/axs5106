@@ -20,7 +20,33 @@ jobs:
 
     steps:
     - name: Checkout repository
-      uses: actions/checkout@v4
+      uses: actions/checkout@v6.0.3
+
+    - name: Optimize runner environment (Swap & /tmp)
+      run: |
+        # 🚨 【针对性物理解决 Swap 核心隐患】 🚨
+        echo "⚙️ 正在物理重构编译机 Swap 交换分区技术栈..."
+        # 1. 停用系统可能存在的零碎、低效旧交换分区
+        sudo swapoff -a || true
+        # 2. 划出 5GB 专属全量 Swap 空间
+        sudo dd if=/dev/zero of=/swapfile bs=1M count=5120
+        sudo chmod 600 /swapfile
+        sudo mkswap /swapfile
+        sudo swapon /swapfile
+        # 3. 强行修改内核虚拟内存激进系数（从默认 60 压榨到 10）
+        # 迫使 CPU 优先榨干物理内存，不到最后一刻绝不读写硬盘，从底层物理掐断 Swap 造成的 I/O 假死
+        sudo sysctl vm.swappiness=10
+        echo "✅ Swap 扩容至 5GB 且 swappiness=10 校准完毕！"
+        
+        echo "📊 扩容系统全局 /tmp 至 10G"
+        # 扩容系统默认 /tmp 临时分区（关键修复）
+        sudo umount /tmp || true
+        sudo mount -t tmpfs tmpfs /tmp -o size=10G,nr_inodes=0
+        echo "✅ /tmp 扩容至 10GB 完成"
+        
+        echo "📊 检查当前磁盘与内存空间分布："
+        df -h
+        free -h
 
     - name: Install build dependencies (including zstd)
       run: |
@@ -33,12 +59,11 @@ jobs:
 
     - name: Download OpenWrt 25.12 SDK
       run: |
-        MIRROR_URL="https://mirrors.tuna.tsinghua.edu.cn/openwrt/releases/${RELEASE_VER}/targets/${TARGET_DIR}/${SDK_FILE}"
+        # GitHub Actions 直连 OpenWrt 官方源速度极快，无需使用国内镜像
         OFFICIAL_URL="https://downloads.openwrt.org/releases/${RELEASE_VER}/targets/${TARGET_DIR}/${SDK_FILE}"
         
-        echo "Attempting to download SDK from Tsinghua Mirror..."
-        # 优先尝试清华镜像，如果失败 (exit code 非 0) 则回退到官方源
-        wget -q --show-progress "$MIRROR_URL" -O sdk.tar.zst || wget -q --show-progress "$OFFICIAL_URL" -O sdk.tar.zst
+        echo "Downloading SDK from official OpenWrt source..."
+        wget -q --show-progress "$OFFICIAL_URL" -O sdk.tar.zst
         
         if [ ! -s sdk.tar.zst ]; then
           echo "::error::SDK download failed!"
@@ -61,11 +86,7 @@ jobs:
     - name: Update feeds and configure
       working-directory: openwrt-sdk
       run: |
-        # 替换 feeds 源为清华镜像，加速下载
-        if [ -f feeds.conf.default ]; then
-          sed -i 's|https://downloads.openwrt.org|https://mirrors.tuna.tsinghua.edu.cn/openwrt|g' feeds.conf.default
-        fi
-        
+        # 直接使用官方默认源更新 feeds (GitHub Actions 连接官方源速度极快)
         ./scripts/feeds update -a
         ./scripts/feeds install -a
         
@@ -96,7 +117,7 @@ jobs:
         find bin/ -name "kmod-${PKG_NAME}*.apk" -o -name "kmod-${PKG_NAME}*.ipk"
 
     - name: Upload compiled Package artifact
-      uses: actions/upload-artifact@v4
+      uses: actions/upload-artifact@v7.0.1
       with:
         name: kmod-${{ env.PKG_NAME }}-openwrt-25.12
         path: |
