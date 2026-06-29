@@ -22,6 +22,12 @@ define KernelPackage/axs5106/description
   Adapted for OpenWrt 25.12 / Linux 6.12.
 endef
 
+# 🚨 关键修复：定义 Prepare 阶段，把本地的 src 目录完整复制到编译区！
+define Build/Prepare
+	mkdir -p $(PKG_BUILD_DIR)/src
+	$(CP) ./src/* $(PKG_BUILD_DIR)/src/
+endef
+
 # 覆盖默认的 Compile，直接调用内核 Kbuild 编译 src 目录
 define Build/Compile
 	+$(KERNEL_MAKE) M="$(PKG_BUILD_DIR)/src" modules
